@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1e293b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>PPL Tracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192x192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192x192.png" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; background: #0f172a; overflow-x: hidden; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    /* ───── IndexedDB Storage ───── */
+    const DB_NAME = 'ppl-tracker-db';
+    const DB_VERSION = 1;
+    const STORE = 'kv';
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => { req.result.createObjectStore(STORE); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    const db = {
+      async get(key) {
+        try {
+          const d = await openDB();
+          return new Promise((res) => {
+            const tx = d.transaction(STORE, 'readonly');
+            const r = tx.objectStore(STORE).get(key);
+            r.onsuccess = () => res(r.result !== undefined ? r.result : null);
+            r.onerror = () => res(null);
+          });
+        } catch (e) { return null; }
+      },
+      async set(key, value) {
+        try {
+          const d = await openDB();
+          return new Promise((res) => {
+            const tx = d.transaction(STORE, 'readwrite');
+            tx.objectStore(STORE).put(value, key);
+            tx.oncomplete = () => res(true);
+            tx.onerror = () => res(false);
+          });
+        } catch (e) { return false; }
+      },
+    };
+
+    /* ───── Icons (inline SVG) ───── */
+    const Icon = ({ name, size = 20, className = '' }) => {
+      const icons = {
+        dumbbell: <path d="M6.5 6.5h11M3 10a2 2 0 012-2h1v8H5a2 2 0 01-2-2v-4zM18 10a2 2 0 012-2h1v8h-1a2 2 0 01-2-2v-4zM6.5 6.5v11M17.5 6.5v11" />,
+        left: <path d="M15 18l-6-6 6-6" />,
+        check: <path d="M20 6L9 17l-5-5" />,
+        trend: <><polyline points="22,12 18,12 15,21 9,3 6,12 2,12" /></>,
+        cal: <><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></>,
+        down: <><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7,10 12,15 17,10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
+        trash: <><polyline points="3,6 5,6 21,6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></>,
+        edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" /></>,
+        play: <polygon points="5,3 19,12 5,21" />,
+        plus: <><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>,
+        minus: <line x1="5" y1="12" x2="19" y2="12" />,
+        settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></>,
+        x: <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>,
+        save: <><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" /><polyline points="17,21 17,13 7,13 7,21" /><polyline points="7,3 7,8 15,8" /></>,
+      };
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          className={className}>{icons[name]}</svg>
+      );
+    };
+
+    /* ───── Data ───── */
+    const DEFAULT_WORKOUTS = {
+      Push: [
+        { name: 'Bench Press', sets: 4, reps: '6-8' },
+        { name: 'Overhead Press', sets: 3, reps: '8-10' },
+        { name: 'Incline DB Press', sets: 3, reps: '10' },
+        { name: 'Lateral Raises', sets: 3, reps: '12-15' },
+        { name: 'Triceps Pushdown', sets: 3, reps: '12' },
+        { name: 'Overhead Triceps Ext', sets: 3, reps: '12' },
+      ],
+      Pull: [
+        { name: 'Pull-ups / Lat Pulldown', sets: 4, reps: '6-10' },
+        { name: 'Chest-Supported Row', sets: 3, reps: '8-10' },
+        { name: 'Seated Cable Row', sets: 3, reps: '10-12' },
+        { name: 'Face Pulls', sets: 3, reps: '15' },
+        { name: 'Barbell / DB Curl', sets: 3, reps: '10' },
+        { name: 'Hammer Curl', sets: 3, reps: '12' },
+      ],
+      Legs: [
+        { name: 'Back Squat', sets: 4, reps: '6-8' },
+        { name: 'Bulgarian Split Squat', sets: 3, reps: '8-10/leg' },
+        { name: 'Single-Leg DB RDL', sets: 3, reps: '8-10/leg' },
+        { name: 'Leg Press', sets: 3, reps: '10-12' },
+        { name: 'Leg Curl', sets: 3, reps: '12' },
+        { name: 'Standing Calf Raise', sets: 4, reps: '12-15' },
+      ],
+    };
+
+    const SCHEDULE = [
+      { day: 'Mon', workout: 'Push', label: 'Push A' },
+      { day: 'Tue', workout: 'Pull', label: 'Pull A' },
+      { day: 'Wed', workout: 'Legs', label: 'Legs A' },
+      { day: 'Thu', workout: 'Push', label: 'Push B' },
+      { day: 'Fri', workout: 'Pull', label: 'Pull B' },
+      { day: 'Sat', workout: 'Legs', label: 'Legs B' },
+      { day: 'Sun', workout: null, label: 'Rest' },
+    ];
+
+    const SEED = {
+      'session-push-a-20250409': {
+        type: 'Push', date: '2025-04-09T19:50:00.000Z',
+        exercises: [
+          { name: 'Bench Press', targetReps: '6-8', sets: [{ weight:'115',reps:'7' },{ weight:'115',reps:'7' },{ weight:'115',reps:'7' },{ weight:'115',reps:'7' }] },
+          { name: 'Overhead Press', targetReps: '8-10', sets: [{ weight:'30',reps:'12' },{ weight:'40',reps:'12' },{ weight:'40',reps:'12' }] },
+          { name: 'Incline DB Press', targetReps: '10', sets: [{ weight:'17.5',reps:'12' },{ weight:'17.5',reps:'12' },{ weight:'20',reps:'12' }] },
+          { name: 'Lateral Raises', targetReps: '12-15', sets: [{ weight:'15',reps:'15' },{ weight:'15',reps:'15' },{ weight:'15',reps:'15' }] },
+          { name: 'Triceps Pushdown', targetReps: '12', sets: [{ weight:'30',reps:'12' },{ weight:'30',reps:'12' },{ weight:'25',reps:'12' }] },
+        ],
+      },
+    };
+
+    const K = { HIST: 'hist', DRAFTS: 'drafts', TPL: 'templates' };
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+    const buildEmpty = (exList) => exList.map(ex => ({ name: ex.name, targetReps: ex.reps, sets: Array(ex.sets).fill(null).map(() => ({ weight: '', reps: '' })) }));
+    const buildFrom = (exs) => exs.map(ex => ({ name: ex.name, targetReps: ex.targetReps || '', sets: ex.sets.map(s => ({ weight: s.weight || '', reps: s.reps || '' })) }));
+
+    /* ───── App ───── */
+    function App() {
+      const [view, setView] = useState('home');
+      const [curType, setCurType] = useState(null);
+      const [editId, setEditId] = useState(null);
+      const [draftId, setDraftId] = useState(null);
+      const [exercises, setExercises] = useState([]);
+      const [history, setHistory] = useState({});
+      const [drafts, setDrafts] = useState({});
+      const [templates, setTemplates] = useState(DEFAULT_WORKOUTS);
+      const [lastSess, setLastSess] = useState({});
+      const [loading, setLoading] = useState(true);
+      const [savedConfirm, setSavedConfirm] = useState(false);
+      const [confirmDel, setConfirmDel] = useState(null);
+      const [showAddEx, setShowAddEx] = useState(false);
+      const [newName, setNewName] = useState('');
+      const [newSets, setNewSets] = useState('3');
+      const [newReps, setNewReps] = useState('10');
+      const [editTpl, setEditTpl] = useState(null);
+      const autoRef = useRef(null);
+      const draftsRef = useRef({});
+
+      const compLast = useCallback((h) => {
+        const l = {};
+        ['Push','Pull','Legs'].forEach(t => {
+          const s = Object.entries(h).filter(([_,v]) => v.type === t).sort((a,b) => new Date(b[1].date) - new Date(a[1].date));
+          if (s.length) l[t] = s[0][1];
+        });
+        return l;
+      }, []);
+
+      useEffect(() => {
+        (async () => {
+          let h = { ...SEED };
+          try { const r = await db.get(K.HIST); if (r && Object.keys(r).length) h = r; else await db.set(K.HIST, h); } catch(e){}
+          let d = {};
+          try { const r = await db.get(K.DRAFTS); if (r) d = r; } catch(e){}
+          let t = DEFAULT_WORKOUTS;
+          try { const r = await db.get(K.TPL); if (r) t = r; } catch(e){}
+          setHistory(h); setDrafts(d); draftsRef.current = d; setTemplates(t); setLastSess(compLast(h)); setLoading(false);
+        })();
+      }, [compLast]);
+
+      const saveHist = async (h) => { setHistory(h); setLastSess(compLast(h)); await db.set(K.HIST, h); };
+      const saveDrafts = async (d) => { setDrafts(d); draftsRef.current = d; await db.set(K.DRAFTS, d); };
+      const saveTpl = async (t) => { setTemplates(t); await db.set(K.TPL, t); };
+
+      const autosave = (exData, dId, type) => {
+        if (autoRef.current) clearTimeout(autoRef.current);
+        autoRef.current = setTimeout(async () => {
+          if (editId) return;
+          const nd = { ...draftsRef.current, [dId]: { type, updatedAt: new Date().toISOString(), exercises: exData } };
+          await saveDrafts(nd);
+        }, 600);
+      };
+
+      const startWk = (type) => { setCurType(type); setEditId(null); const did = `d-${type}-${Date.now()}`; setDraftId(did); setExercises(buildEmpty(templates[type] || DEFAULT_WORKOUTS[type])); setView('workout'); };
+      const resumeDraft = (dId) => { const d = drafts[dId]; if(!d)return; setCurType(d.type); setEditId(null); setDraftId(dId); setExercises(buildFrom(d.exercises)); setView('workout'); };
+      const editSess = (id) => { const s = history[id]; if(!s)return; setCurType(s.type); setEditId(id); setDraftId(null); setExercises(buildFrom(s.exercises)); setView('workout'); };
+
+      const updateSet = (ei, si, f, v) => {
+        setExercises(prev => {
+          const n = clone(prev); n[ei].sets[si][f] = v;
+          if (draftId && !editId) autosave(n, draftId, curType);
+          return n;
+        });
+      };
+      const addSet = (ei) => { setExercises(prev => { const n = clone(prev); n[ei].sets.push({weight:'',reps:''}); if(draftId&&!editId) autosave(n,draftId,curType); return n; }); };
+      const rmSet = (ei) => { setExercises(prev => { const n = clone(prev); if(n[ei].sets.length>1) n[ei].sets.pop(); if(draftId&&!editId) autosave(n,draftId,curType); return n; }); };
+      const rmEx = (ei) => { setExercises(prev => { const n = clone(prev); n.splice(ei,1); if(draftId&&!editId) autosave(n,draftId,curType); return n; }); };
+      const addEx = () => {
+        if(!newName.trim()) return;
+        setExercises(prev => { const n = [...clone(prev), { name:newName.trim(), targetReps:newReps||'10', sets:Array(parseInt(newSets)||3).fill(null).map(()=>({weight:'',reps:''})) }]; if(draftId&&!editId) autosave(n,draftId,curType); return n; });
+        setNewName(''); setNewSets('3'); setNewReps('10'); setShowAddEx(false);
+      };
+
+      const finish = async () => {
+        if (autoRef.current) clearTimeout(autoRef.current);
+        const exs = exercises.map(ex => ({ name:ex.name, targetReps:ex.targetReps, sets:ex.sets }));
+        if (editId) {
+          await saveHist({ ...history, [editId]: { ...history[editId], exercises: exs } });
+        } else {
+          const id = `s-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+          await saveHist({ ...history, [id]: { type:curType, date:new Date().toISOString(), exercises:exs } });
+          if (draftId && draftsRef.current[draftId]) { const nd = { ...draftsRef.current }; delete nd[draftId]; await saveDrafts(nd); }
+        }
+        setSavedConfirm(true);
+        setTimeout(() => { setSavedConfirm(false); setEditId(null); setDraftId(null); setView('home'); }, 1200);
+      };
+
+      const exitHome = () => {
+        if (autoRef.current) clearTimeout(autoRef.current);
+        if (draftId && !editId && exercises.some(ex => ex.sets.some(s => s.weight || s.reps))) {
+          const nd = { ...draftsRef.current, [draftId]: { type:curType, updatedAt:new Date().toISOString(), exercises } };
+          saveDrafts(nd);
+        }
+        setEditId(null); setDraftId(null); setView('home');
+      };
+
+      const delSess = async (id) => { const h = { ...history }; delete h[id]; await saveHist(h); setConfirmDel(null); };
+      const delDraft = async (dId) => { const d = { ...draftsRef.current }; delete d[dId]; await saveDrafts(d); };
+
+      const getLast = (type, name, si) => {
+        const l = lastSess[type]; if(!l?.exercises) return null;
+        const ex = l.exercises.find(e=>e.name===name); if(!ex?.sets?.[si]) return null;
+        const s = ex.sets[si]; if(!s.weight&&!s.reps) return null;
+        return `${s.weight||'-'}×${s.reps||'-'}`;
+      };
+
+      const addTplEx = () => { if(!newName.trim())return; setTemplates(prev=>{ const n={...prev,[editTpl]:[...prev[editTpl],{name:newName.trim(),sets:parseInt(newSets)||3,reps:newReps||'10'}]}; saveTpl(n); return n; }); setNewName('');setNewSets('3');setNewReps('10'); };
+      const rmTplEx = (i) => { setTemplates(prev=>{ const n={...prev,[editTpl]:prev[editTpl].filter((_,j)=>j!==i)}; saveTpl(n); return n; }); };
+      const tplSets = (i,d) => { setTemplates(prev=>{ const l=[...prev[editTpl]]; l[i]={...l[i],sets:Math.max(1,l[i].sets+d)}; const n={...prev,[editTpl]:l}; saveTpl(n); return n; }); };
+
+      const exportCSV = () => {
+        const rows = [['Date','Time','Workout','Exercise','Set #','Weight (lbs)','Reps']];
+        Object.entries(history).sort((a,b)=>new Date(a[1].date)-new Date(b[1].date)).forEach(([_,s])=>{
+          const d=new Date(s.date);
+          s.exercises.forEach(ex=>{ ex.sets.forEach((set,si)=>{ rows.push([d.toLocaleDateString(),d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),s.type,ex.name,si+1,set.weight||'',set.reps||'']); }); });
+        });
+        const csv=rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
+        const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download=`ppl-log-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+      };
+
+      if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center"><div className="animate-pulse text-slate-400">Loading...</div></div>;
+      if (savedConfirm) return <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center"><div className="bg-green-600 rounded-full p-5 mb-4"><Icon name="check" size={48}/></div><h2 className="text-2xl font-bold mb-1">Workout Saved!</h2><p className="text-slate-400">Added to history</p></div>;
+
+      /* Template Editor */
+      if (view === 'templates') {
+        const list = templates[editTpl] || [];
+        return (
+          <div className="min-h-screen bg-slate-900 text-white pb-8">
+            <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center z-10">
+              <button onClick={()=>setView('home')} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
+              <h1 className="text-xl font-bold ml-4">Edit {editTpl} Template</h1>
+            </div>
+            <div className="p-4 space-y-3">
+              {list.map((ex,i)=>(
+                <div key={i} className="bg-slate-800 rounded-lg p-4 flex items-center justify-between">
+                  <div className="flex-1"><div className="font-semibold">{ex.name}</div><div className="text-sm text-slate-400">{ex.reps} reps</div></div>
+                  <div className="flex items-center gap-2 mr-3">
+                    <button onClick={()=>tplSets(i,-1)} className="bg-slate-700 rounded p-1"><Icon name="minus" size={14}/></button>
+                    <span className="w-8 text-center font-bold">{ex.sets}</span>
+                    <button onClick={()=>tplSets(i,1)} className="bg-slate-700 rounded p-1"><Icon name="plus" size={14}/></button>
+                  </div>
+                  <button onClick={()=>rmTplEx(i)} className="text-slate-500 hover:text-red-400"><Icon name="trash" size={16}/></button>
+                </div>
+              ))}
+              <div className="bg-slate-800 rounded-lg p-4 space-y-3 border border-dashed border-slate-600">
+                <div className="text-sm font-bold text-slate-400">Add Exercise</div>
+                <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Exercise name" className="w-full bg-slate-700 rounded px-3 py-2 text-white"/>
+                <div className="flex gap-3">
+                  <div className="flex-1"><label className="text-xs text-slate-400">Sets</label><input type="number" inputMode="numeric" value={newSets} onChange={e=>setNewSets(e.target.value)} className="w-full bg-slate-700 rounded px-3 py-2 text-white"/></div>
+                  <div className="flex-1"><label className="text-xs text-slate-400">Target reps</label><input value={newReps} onChange={e=>setNewReps(e.target.value)} placeholder="e.g. 8-10" className="w-full bg-slate-700 rounded px-3 py-2 text-white"/></div>
+                </div>
+                <button onClick={addTplEx} className="w-full bg-blue-600 hover:bg-blue-700 rounded py-2 font-bold flex items-center justify-center gap-2"><Icon name="plus" size={16}/> Add to Template</button>
+              </div>
+              <p className="text-xs text-slate-500 text-center mt-4">Changes apply to new sessions only.</p>
+            </div>
+          </div>
+        );
+      }
+
+      /* Workout View */
+      if (view === 'workout') {
+        return (
+          <div className="min-h-screen bg-slate-900 text-white pb-28">
+            <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center justify-between z-10">
+              <button onClick={exitHome} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
+              <h1 className="text-xl font-bold">{editId ? `Edit ${curType}` : `${curType} Day`}</h1>
+              <div className="w-12"/>
+            </div>
+            {!editId && <div className="px-4 pt-2 text-xs text-slate-500 text-center">Auto-saves as you type. Leave and resume anytime.</div>}
+            <div className="p-4 space-y-4">
+              {exercises.map((ex,ei)=>(
+                <div key={ei} className="bg-slate-800 rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-3">
+                    <div><h2 className="font-bold text-lg">{ex.name}</h2><span className="text-xs text-slate-400">{ex.sets.length} sets · {ex.targetReps} reps</span></div>
+                    <button onClick={()=>rmEx(ei)} className="text-slate-500 hover:text-red-400"><Icon name="x" size={18}/></button>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-12 gap-2 text-xs text-slate-400 px-1"><div className="col-span-1">Set</div><div className="col-span-4">Weight</div><div className="col-span-3">Reps</div><div className="col-span-4 text-right">Last</div></div>
+                    {ex.sets.map((set,si)=>(
+                      <div key={si} className="grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-1 text-slate-400 text-sm">{si+1}</div>
+                        <input type="number" inputMode="decimal" placeholder="lbs" value={set.weight} onChange={e=>updateSet(ei,si,'weight',e.target.value)} className="col-span-4 bg-slate-700 rounded px-2 py-2 text-white text-center"/>
+                        <input type="number" inputMode="numeric" placeholder="reps" value={set.reps} onChange={e=>updateSet(ei,si,'reps',e.target.value)} className="col-span-3 bg-slate-700 rounded px-2 py-2 text-white text-center"/>
+                        <div className="col-span-4 text-right text-xs text-slate-500">{getLast(curType,ex.name,si)||'—'}</div>
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={()=>addSet(ei)} className="flex-1 text-xs bg-slate-700 hover:bg-slate-600 rounded py-1.5 flex items-center justify-center gap-1 text-slate-300"><Icon name="plus" size={12}/> Set</button>
+                      {ex.sets.length > 1 && <button onClick={()=>rmSet(ei)} className="flex-1 text-xs bg-slate-700 hover:bg-slate-600 rounded py-1.5 flex items-center justify-center gap-1 text-slate-300"><Icon name="minus" size={12}/> Set</button>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {showAddEx ? (
+                <div className="bg-slate-800 rounded-lg p-4 space-y-3 border border-blue-500/40">
+                  <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Exercise name" className="w-full bg-slate-700 rounded px-3 py-2 text-white" autoFocus/>
+                  <div className="flex gap-3">
+                    <div className="flex-1"><label className="text-xs text-slate-400">Sets</label><input type="number" inputMode="numeric" value={newSets} onChange={e=>setNewSets(e.target.value)} className="w-full bg-slate-700 rounded px-3 py-2 text-white"/></div>
+                    <div className="flex-1"><label className="text-xs text-slate-400">Target reps</label><input value={newReps} onChange={e=>setNewReps(e.target.value)} placeholder="e.g. 8-10" className="w-full bg-slate-700 rounded px-3 py-2 text-white"/></div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={addEx} className="flex-1 bg-blue-600 hover:bg-blue-700 rounded py-2 font-bold">Add</button>
+                    <button onClick={()=>setShowAddEx(false)} className="flex-1 bg-slate-700 rounded py-2">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={()=>{setNewName('');setNewSets('3');setNewReps('10');setShowAddEx(true);}} className="w-full bg-slate-800 hover:bg-slate-700 border border-dashed border-slate-600 rounded-lg p-4 flex items-center justify-center gap-2 text-slate-400"><Icon name="plus" size={18}/> Add Exercise</button>
+              )}
+            </div>
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-700">
+              <button onClick={finish} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2"><Icon name="save" size={20}/> {editId ? 'Save Changes' : 'Finish & Save to History'}</button>
+            </div>
+          </div>
+        );
+      }
+
+      /* History View */
+      if (view === 'history') {
+        const sess = Object.entries(history).sort((a,b)=>new Date(b[1].date)-new Date(a[1].date));
+        return (
+          <div className="min-h-screen bg-slate-900 text-white pb-8">
+            <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center justify-between z-10">
+              <button onClick={()=>setView('home')} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
+              <h1 className="text-xl font-bold">History</h1>
+              <button onClick={exportCSV} className="flex items-center gap-1 text-blue-400 text-sm"><Icon name="down" size={16}/> CSV</button>
+            </div>
+            <div className="p-4 space-y-3">
+              {sess.length===0 && <div className="text-center text-slate-400 mt-12">No sessions logged yet</div>}
+              {sess.map(([id,s])=>(
+                <div key={id} className="bg-slate-800 rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <div><h3 className="font-bold">{s.type}</h3><span className="text-xs text-slate-400">{new Date(s.date).toLocaleDateString()} — {new Date(s.date).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>
+                    {confirmDel===id ? (
+                      <div className="flex items-center gap-2">
+                        <button onClick={()=>delSess(id)} className="text-xs bg-red-600 px-2 py-1 rounded">Delete</button>
+                        <button onClick={()=>setConfirmDel(null)} className="text-xs bg-slate-600 px-2 py-1 rounded">Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <button onClick={()=>editSess(id)} className="text-slate-400 hover:text-blue-400"><Icon name="edit" size={16}/></button>
+                        <button onClick={()=>setConfirmDel(id)} className="text-slate-500 hover:text-red-400"><Icon name="trash" size={16}/></button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-sm text-slate-300 space-y-1">
+                    {s.exercises.map((ex,i)=>{
+                      const top = ex.sets.filter(s=>s.weight).reduce((m,s)=>Number(s.weight)>Number(m?.weight||0)?s:m, null);
+                      return <div key={i} className="flex justify-between"><span>{ex.name}</span><span className="text-slate-400">{top?`${top.weight} × ${top.reps}`:'—'}</span></div>;
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      /* Home View */
+      const today = new Date().getDay();
+      const todayIdx = today===0?6:today-1;
+      const draftEntries = Object.entries(drafts).sort((a,b)=>new Date(b[1].updatedAt)-new Date(a[1].updatedAt));
+
+      return (
+        <div className="min-h-screen bg-slate-900 text-white pb-8">
+          <div className="p-6 border-b border-slate-700">
+            <div className="flex items-center gap-2 mb-1"><Icon name="dumbbell" size={24} className="text-blue-400"/><h1 className="text-2xl font-bold">PPL Tracker</h1></div>
+            <p className="text-slate-400 text-sm">Push / Pull / Legs · 6 days · No deadlifts</p>
+          </div>
+          <div className="p-4">
+            {draftEntries.length > 0 && <>
+              <h2 className="text-sm font-bold text-amber-400 uppercase tracking-wide mb-3 flex items-center gap-2"><Icon name="play" size={14}/> In Progress</h2>
+              <div className="space-y-2 mb-6">
+                {draftEntries.map(([dId,d])=>{
+                  const filled = d.exercises.reduce((n,ex)=>n+ex.sets.filter(s=>s.weight||s.reps).length,0);
+                  return (
+                    <div key={dId} className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-4 flex items-center justify-between">
+                      <button onClick={()=>resumeDraft(dId)} className="flex-1 text-left">
+                        <div className="font-bold">{d.type} — Resume</div>
+                        <div className="text-xs text-slate-400">{filled} set{filled!==1?'s':''} logged · {new Date(d.updatedAt).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+                      </button>
+                      <button onClick={()=>delDraft(dId)} className="text-slate-500 hover:text-red-400 ml-3"><Icon name="trash" size={16}/></button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>}
+
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-2"><Icon name="cal" size={14}/> This Week</h2>
+            <div className="space-y-2 mb-6">
+              {SCHEDULE.map((s,i)=>(
+                <button key={i} onClick={()=>s.workout&&startWk(s.workout)} disabled={!s.workout}
+                  className={`w-full flex items-center justify-between p-4 rounded-lg transition ${i===todayIdx?'bg-blue-600 hover:bg-blue-700':s.workout?'bg-slate-800 hover:bg-slate-700':'bg-slate-800/50 cursor-default'}`}>
+                  <div className="flex items-center gap-3">
+                    <span className={`font-bold w-10 text-left ${i===todayIdx?'text-white':'text-slate-400'}`}>{s.day}</span>
+                    <span className="font-semibold">{s.label}</span>
+                    {i===todayIdx && <span className="text-xs bg-white/20 px-2 py-0.5 rounded">Today</span>}
+                  </div>
+                  {s.workout && <Icon name="left" size={20} className="rotate-180 opacity-50"/>}
+                </button>
+              ))}
+            </div>
+
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide mb-3">Quick Start</h2>
+            <div className="grid grid-cols-3 gap-2 mb-6">
+              {['Push','Pull','Legs'].map(t=> <button key={t} onClick={()=>startWk(t)} className="bg-slate-800 hover:bg-slate-700 rounded-lg p-4 font-bold">{t}</button>)}
+            </div>
+
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-2"><Icon name="settings" size={14}/> Edit Templates</h2>
+            <div className="grid grid-cols-3 gap-2 mb-6">
+              {['Push','Pull','Legs'].map(t=> <button key={t} onClick={()=>{setEditTpl(t);setNewName('');setNewSets('3');setNewReps('10');setView('templates');}} className="bg-slate-800 hover:bg-slate-700 rounded-lg p-3 text-sm text-slate-300 flex items-center justify-center gap-1"><Icon name="edit" size={14}/> {t}</button>)}
+            </div>
+
+            <div className="space-y-2">
+              <button onClick={()=>setView('history')} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold"><Icon name="trend" size={18}/> View History ({Object.keys(history).length})</button>
+              <button onClick={exportCSV} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold text-blue-400"><Icon name="down" size={18}/> Export All to CSV</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</body>
+</html>
