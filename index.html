@@ -8,8 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>PPL Tracker</title>
   <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="icons/icon-192x192.png" />
-  <link rel="apple-touch-icon" href="icons/icon-192x192.png" />
+  <link rel="icon" href="icon-192x192.png" />
+  <link rel="apple-touch-icon" href="icon-192x192.png" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -28,7 +28,13 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
 
-    /* ───── IndexedDB Storage ───── */
+    /* ═══════════════════════════════════════════
+       DUAL STORAGE: IndexedDB + localStorage
+       IndexedDB = primary, localStorage = hot backup
+       On load: tries IndexedDB first, falls back to localStorage
+       On save: writes to BOTH simultaneously
+       ═══════════════════════════════════════════ */
+
     const DB_NAME = 'ppl-tracker-db';
     const DB_VERSION = 1;
     const STORE = 'kv';
@@ -42,7 +48,7 @@
       });
     }
 
-    const db = {
+    const idb = {
       async get(key) {
         try {
           const d = await openDB();
@@ -67,6 +73,32 @@
       },
     };
 
+    const ls = {
+      get(key) { try { const v = localStorage.getItem('ppl_' + key); return v ? JSON.parse(v) : null; } catch(e) { return null; } },
+      set(key, value) { try { localStorage.setItem('ppl_' + key, JSON.stringify(value)); return true; } catch(e) { return false; } },
+    };
+
+    // Dual storage: read from IndexedDB first, fall back to localStorage
+    const store = {
+      async get(key) {
+        const idbVal = await idb.get(key);
+        if (idbVal !== null) return idbVal;
+        const lsVal = ls.get(key);
+        if (lsVal !== null) {
+          // Restore IndexedDB from localStorage backup
+          await idb.set(key, lsVal);
+          return lsVal;
+        }
+        return null;
+      },
+      async set(key, value) {
+        // Write to BOTH
+        const r1 = await idb.set(key, value);
+        const r2 = ls.set(key, value);
+        return r1 || r2; // succeed if either works
+      },
+    };
+
     /* ───── Icons (inline SVG) ───── */
     const Icon = ({ name, size = 20, className = '' }) => {
       const icons = {
@@ -84,6 +116,8 @@
         settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></>,
         x: <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>,
         save: <><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" /><polyline points="17,21 17,13 7,13 7,21" /><polyline points="7,3 7,8 15,8" /></>,
+        upload: <><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17,8 12,3 7,8" /><line x1="12" y1="3" x2="12" y2="15" /></>,
+        shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></>,
       };
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -148,6 +182,50 @@
     const buildEmpty = (exList) => exList.map(ex => ({ name: ex.name, targetReps: ex.reps, sets: Array(ex.sets).fill(null).map(() => ({ weight: '', reps: '' })) }));
     const buildFrom = (exs) => exs.map(ex => ({ name: ex.name, targetReps: ex.targetReps || '', sets: ex.sets.map(s => ({ weight: s.weight || '', reps: s.reps || '' })) }));
 
+    /* ═══════════════════════════════════════════
+       BACKUP / RESTORE HELPERS
+       ═══════════════════════════════════════════ */
+    const exportBackup = (history, drafts, templates) => {
+      const backup = {
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        history,
+        drafts,
+        templates,
+      };
+      const json = JSON.stringify(backup, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ppl-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const triggerImport = () => {
+      return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = (e) => {
+          const file = e.target.files[0];
+          if (!file) return resolve(null);
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            try {
+              const data = JSON.parse(ev.target.result);
+              resolve(data);
+            } catch (err) {
+              resolve(null);
+            }
+          };
+          reader.readAsText(file);
+        };
+        input.click();
+      });
+    };
+
     /* ───── App ───── */
     function App() {
       const [view, setView] = useState('home');
@@ -167,8 +245,11 @@
       const [newSets, setNewSets] = useState('3');
       const [newReps, setNewReps] = useState('10');
       const [editTpl, setEditTpl] = useState(null);
+      const [toast, setToast] = useState('');
       const autoRef = useRef(null);
       const draftsRef = useRef({});
+
+      const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
       const compLast = useCallback((h) => {
         const l = {};
@@ -182,18 +263,18 @@
       useEffect(() => {
         (async () => {
           let h = { ...SEED };
-          try { const r = await db.get(K.HIST); if (r && Object.keys(r).length) h = r; else await db.set(K.HIST, h); } catch(e){}
+          try { const r = await store.get(K.HIST); if (r && Object.keys(r).length) h = r; else await store.set(K.HIST, h); } catch(e){}
           let d = {};
-          try { const r = await db.get(K.DRAFTS); if (r) d = r; } catch(e){}
+          try { const r = await store.get(K.DRAFTS); if (r) d = r; } catch(e){}
           let t = DEFAULT_WORKOUTS;
-          try { const r = await db.get(K.TPL); if (r) t = r; } catch(e){}
+          try { const r = await store.get(K.TPL); if (r) t = r; } catch(e){}
           setHistory(h); setDrafts(d); draftsRef.current = d; setTemplates(t); setLastSess(compLast(h)); setLoading(false);
         })();
       }, [compLast]);
 
-      const saveHist = async (h) => { setHistory(h); setLastSess(compLast(h)); await db.set(K.HIST, h); };
-      const saveDrafts = async (d) => { setDrafts(d); draftsRef.current = d; await db.set(K.DRAFTS, d); };
-      const saveTpl = async (t) => { setTemplates(t); await db.set(K.TPL, t); };
+      const saveHist = async (h) => { setHistory(h); setLastSess(compLast(h)); await store.set(K.HIST, h); };
+      const saveDrafts = async (d) => { setDrafts(d); draftsRef.current = d; await store.set(K.DRAFTS, d); };
+      const saveTpl = async (t) => { setTemplates(t); await store.set(K.TPL, t); };
 
       const autosave = (exData, dId, type) => {
         if (autoRef.current) clearTimeout(autoRef.current);
@@ -272,14 +353,34 @@
         const a=document.createElement('a'); a.href=url; a.download=`ppl-log-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
       };
 
+      const handleBackup = () => { exportBackup(history, drafts, templates); showToast('Backup downloaded!'); };
+
+      const handleRestore = async () => {
+        const data = await triggerImport();
+        if (!data) { showToast('No file selected'); return; }
+        if (!data.history) { showToast('Invalid backup file'); return; }
+        // Merge: imported data wins for matching keys, keeps existing unique keys
+        const mergedHist = { ...history, ...data.history };
+        const mergedDrafts = { ...drafts, ...(data.drafts || {}) };
+        const mergedTpl = data.templates || templates;
+        await saveHist(mergedHist);
+        await saveDrafts(mergedDrafts);
+        await saveTpl(mergedTpl);
+        showToast(`Restored! ${Object.keys(data.history).length} sessions imported.`);
+      };
+
       if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center"><div className="animate-pulse text-slate-400">Loading...</div></div>;
-      if (savedConfirm) return <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center"><div className="bg-green-600 rounded-full p-5 mb-4"><Icon name="check" size={48}/></div><h2 className="text-2xl font-bold mb-1">Workout Saved!</h2><p className="text-slate-400">Added to history</p></div>;
+      if (savedConfirm) return <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center"><div className="bg-green-600 rounded-full p-5 mb-4"><Icon name="check" size={48}/></div><h2 className="text-2xl font-bold mb-1">Workout Saved!</h2><p className="text-slate-400">Saved to history + backup</p></div>;
+
+      /* Toast overlay */
+      const Toast = () => toast ? <div className="fixed top-4 left-4 right-4 bg-green-600 text-white rounded-lg p-3 text-center font-semibold z-50 shadow-lg">{toast}</div> : null;
 
       /* Template Editor */
       if (view === 'templates') {
         const list = templates[editTpl] || [];
         return (
           <div className="min-h-screen bg-slate-900 text-white pb-8">
+            <Toast />
             <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center z-10">
               <button onClick={()=>setView('home')} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
               <h1 className="text-xl font-bold ml-4">Edit {editTpl} Template</h1>
@@ -315,6 +416,7 @@
       if (view === 'workout') {
         return (
           <div className="min-h-screen bg-slate-900 text-white pb-28">
+            <Toast />
             <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center justify-between z-10">
               <button onClick={exitHome} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
               <h1 className="text-xl font-bold">{editId ? `Edit ${curType}` : `${curType} Day`}</h1>
@@ -373,6 +475,7 @@
         const sess = Object.entries(history).sort((a,b)=>new Date(b[1].date)-new Date(a[1].date));
         return (
           <div className="min-h-screen bg-slate-900 text-white pb-8">
+            <Toast />
             <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex items-center justify-between z-10">
               <button onClick={()=>setView('home')} className="flex items-center gap-1 text-slate-300"><Icon name="left" size={20}/> Back</button>
               <h1 className="text-xl font-bold">History</h1>
@@ -413,9 +516,11 @@
       const today = new Date().getDay();
       const todayIdx = today===0?6:today-1;
       const draftEntries = Object.entries(drafts).sort((a,b)=>new Date(b[1].updatedAt)-new Date(a[1].updatedAt));
+      const histCount = Object.keys(history).length;
 
       return (
         <div className="min-h-screen bg-slate-900 text-white pb-8">
+          <Toast />
           <div className="p-6 border-b border-slate-700">
             <div className="flex items-center gap-2 mb-1"><Icon name="dumbbell" size={24} className="text-blue-400"/><h1 className="text-2xl font-bold">PPL Tracker</h1></div>
             <p className="text-slate-400 text-sm">Push / Pull / Legs · 6 days · No deadlifts</p>
@@ -465,9 +570,24 @@
             </div>
 
             <div className="space-y-2">
-              <button onClick={()=>setView('history')} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold"><Icon name="trend" size={18}/> View History ({Object.keys(history).length})</button>
-              <button onClick={exportCSV} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold text-blue-400"><Icon name="down" size={18}/> Export All to CSV</button>
+              <button onClick={()=>setView('history')} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold"><Icon name="trend" size={18}/> View History ({histCount})</button>
+              <button onClick={exportCSV} className="w-full bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex items-center justify-center gap-2 font-semibold text-blue-400"><Icon name="down" size={18}/> Export CSV</button>
             </div>
+
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide mt-6 mb-3 flex items-center gap-2"><Icon name="shield" size={14}/> Data Backup</h2>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={handleBackup} className="bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex flex-col items-center gap-2 text-sm font-semibold">
+                <Icon name="down" size={20} className="text-green-400"/>
+                <span>Backup</span>
+                <span className="text-xs text-slate-400 font-normal">{histCount} sessions</span>
+              </button>
+              <button onClick={handleRestore} className="bg-slate-800 hover:bg-slate-700 rounded-lg p-4 flex flex-col items-center gap-2 text-sm font-semibold">
+                <Icon name="upload" size={20} className="text-amber-400"/>
+                <span>Restore</span>
+                <span className="text-xs text-slate-400 font-normal">From JSON file</span>
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 text-center mt-2">Tap Backup after each session to save a recovery file.</p>
           </div>
         </div>
       );
