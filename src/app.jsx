@@ -11,37 +11,58 @@ const DB_NAME = 'ppl-tracker-db';
 const DB_VERSION = 1;
 const STORE = 'kv';
 
+// IndexedDB can hang on some phones (open never fires success or error),
+// which left the app stuck on "Loading...". Every IndexedDB call now has a
+// timeout; if it hangs, IndexedDB is skipped for the session and the app runs
+// on the localStorage copy instead.
+const IDB_TIMEOUT_MS = 3000;
+let dbPromise = null;
+let idbDown = false;
+
+const withTimeout = (p, ms) => Promise.race([
+  p,
+  new Promise((_, reject) => setTimeout(() => reject(new Error('IndexedDB timeout')), ms)),
+]);
+
 function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => { req.result.createObjectStore(STORE); };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => { req.result.createObjectStore(STORE); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error('IndexedDB blocked'));
+    }).catch((e) => { dbPromise = null; throw e; });
+  }
+  return dbPromise;
 }
 
+const idbCall = async (fn, fallback) => {
+  if (idbDown) return fallback;
+  try {
+    return await withTimeout(openDB().then(fn), IDB_TIMEOUT_MS);
+  } catch (e) {
+    console.warn('IndexedDB unavailable, using localStorage:', e);
+    idbDown = true;
+    return fallback;
+  }
+};
+
 const idb = {
-  async get(key) {
-    try {
-      const d = await openDB();
-      return new Promise((res) => {
-        const tx = d.transaction(STORE, 'readonly');
-        const r = tx.objectStore(STORE).get(key);
-        r.onsuccess = () => res(r.result !== undefined ? r.result : null);
-        r.onerror = () => res(null);
-      });
-    } catch (e) { return null; }
+  get(key) {
+    return idbCall((d) => new Promise((res, rej) => {
+      const r = d.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+      r.onsuccess = () => res(r.result !== undefined ? r.result : null);
+      r.onerror = () => rej(r.error);
+    }), null);
   },
-  async set(key, value) {
-    try {
-      const d = await openDB();
-      return new Promise((res) => {
-        const tx = d.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).put(value, key);
-        tx.oncomplete = () => res(true);
-        tx.onerror = () => res(false);
-      });
-    } catch (e) { return false; }
+  set(key, value) {
+    return idbCall((d) => new Promise((res, rej) => {
+      const tx = d.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(value, key);
+      tx.oncomplete = () => res(true);
+      tx.onerror = () => rej(tx.error);
+    }), false);
   },
 };
 

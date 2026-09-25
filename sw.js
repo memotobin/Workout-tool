@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ppl-tracker-v3';
+const CACHE_NAME = 'ppl-tracker-v4';
 // Paths are relative to this file, so they resolve under /Workout-tool/.
 const ASSETS = [
   './',
